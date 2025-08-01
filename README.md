@@ -1,8 +1,6 @@
 # Flare Data-Leak Parser
 This Python script analyzes CSV files containing "identity indicators" data (such as compromised credentials), generating statistical reports and identifying relevant patterns.
 
-Ecco il file README.md pronto per essere scaricato. Copia il contenuto e salvalo in un file `README.md` nel tuo repository:
-
 ![Python Version](https://img.shields.io/badge/python-3.7%2B-blue)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://opensource.org/licenses/MIT)
 
