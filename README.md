@@ -22,9 +22,6 @@ Questo script Python analizza file CSV contenenti dati di "identity indicators" 
 
 ---
 
-$PLx2*5ftPoa7Q5g^2YvYZMi75X7*2wRW&uqS$dG7$
-
- 
 
 #### Utilizzo
 
