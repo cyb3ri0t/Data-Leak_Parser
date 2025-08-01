@@ -3,12 +3,17 @@ This Python script analyzes CSV files containing "identity indicators" data (suc
 
 #### Descrizione
 Questo script Python analizza file CSV contenenti dati di "identity indicators" (come credenziali compromesse), generando report statistici e individuando pattern rilevanti. Include funzionalità di:
-- Analisi di frequenza degli indicatori di identità
-- Raggruppamento dei dati per trimestre/anno
-- Identificazione degli hash più utilizzati nell'ultimo anno
-- Rilevamento di hash simili
-- Associazione tra hash e utenti coinvolti
+    🔍 Analisi indicatori di identità (top 10 più frequenti)
 
+    📅 Raggruppamento trimestrale dei dati (formato YYYY-QX)
+
+    🔑 Identificazione hash compromessi più utilizzati nell'ultimo anno
+
+    🧩 Rilevamento hash simili tramite corrispondenza di sottostringhe
+
+    👥 Associazioni utenti-hash per tracciare l'impatto delle compromissioni
+
+    📊 Generazione report CSV con metriche dettagliate
 ---
 
 #### Prerequisiti
