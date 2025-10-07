@@ -25,38 +25,130 @@ LOGO = r"""
 """
 
 def parse_date(date_string):
-    try:
-        date_string = date_string.strip()
-        return datetime.strptime(date_string, "%m/%d/%Y, %I:%M:%S %p")
-    except ValueError:
+    """Parsing flessibile per diverse tipologie di formato data"""
+    if pd.isna(date_string) or date_string == '':
+        return None
+    
+    if isinstance(date_string, pd.Timestamp):
+        return date_string.to_pydatetime()
+    
+    date_string = str(date_string).strip()
+    formats = [
+        "%m/%d/%Y, %I:%M:%S %p",
+        "%m/%d/%Y, %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%m/%d/%Y"
+    ]
+    
+    for fmt in formats:
         try:
-            return datetime.strptime(date_string, "%m/%d/%Y, %H:%M:%S")
+            return datetime.strptime(date_string, fmt)
         except ValueError:
-            print(f"Errore nel parsing della data: {date_string}")
-            return None
+            continue
+    try:
+        return pd.to_datetime(date_string).to_pydatetime()
+    except:
+        print(f"Errore nel parsing della data: {date_string}")
+        return None
 
 def get_quarter(month):
     return (month - 1) // 3 + 1
 
-def find_similar_hashes(top_hashes, all_hashes, all_hash_counter):
-    similar_dict = {}
-    for top_hash in top_hashes:
-        top_hash_lower = top_hash.lower()
-        similar = {}
-        for candidate in all_hashes:
-            candidate_lower = candidate.lower()
-            for i in range(len(candidate_lower) - 3):
-                substring = candidate_lower[i:i+4]
-                if substring in top_hash_lower and candidate != top_hash:
-                    similar[candidate] = all_hash_counter.get(candidate, 0)
-                    break
-        similar_dict[top_hash] = similar
-    return similar_dict
+class UnionFind:
+    def __init__(self):
+        self.parent = {}
+        self.rank = {}
+    
+    def initialize(self, items):
+        for item in items:
+            self.parent[item] = item
+            self.rank[item] = 0
+    
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+    
+    def union(self, x, y):
+        rx = self.find(x)
+        ry = self.find(y)
+        if rx == ry:
+            return
+        if self.rank[rx] < self.rank[ry]:
+            self.parent[rx] = ry
+        elif self.rank[rx] > self.rank[ry]:
+            self.parent[ry] = rx
+        else:
+            self.parent[ry] = rx
+            self.rank[rx] += 1
 
-def analyze_csv(input_file, output_file):
+def build_hash_components(hashes):
+    uf = UnionFind()
+    uf.initialize(hashes)
+    gram_to_hashes = defaultdict(set)
+    
+    for hash_val in hashes:
+        hash_lower = hash_val.lower()
+        if len(hash_lower) < 4:
+            continue
+        for i in range(len(hash_lower) - 3):
+            gram = hash_lower[i:i+4]
+            gram_to_hashes[gram].add(hash_val)
+    
+    for gram, hash_set in gram_to_hashes.items():
+        if len(hash_set) < 2:
+            continue
+        hash_list = list(hash_set)
+        root = hash_list[0]
+        for i in range(1, len(hash_list)):
+            uf.union(root, hash_list[i])
+    
+    components = defaultdict(set)
+    for hash_val in hashes:
+        root = uf.find(hash_val)
+        components[root].add(hash_val)
+    
+    return components
+
+# ------------------ NUOVA FUNZIONE ------------------
+def count_identities_by_domain(series):
+    """
+    Estrae domini dalle stringhe in `series` (Indicator / Account) e ritorna Counter(domain -> count).
+    - Trova tutte le email via regex in ogni cella (gestisce più email nella stessa cella).
+    - Normalizza i domini (lowercase, rimuove spazi/punteggiatura attaccata).
+    """
+    email_pattern = re.compile(r'[\w\.-]+@[\w\.-]+', re.UNICODE)
+    domain_counter = Counter()
+    for val in series.fillna('').astype(str):
+        if not val:
+            continue
+        # trova tutte le email presenti nella cella
+        emails = email_pattern.findall(val)
+        if not emails:
+            # Se nella cella non ci sono email, prova a vedere se c'è un suffisso tipo "@domain" senza user?
+            # Ma per semplicità ignoriamo valori non email
+            continue
+        for e in emails:
+            # Estrai la parte dopo @ e normalizza
+            parts = e.split('@', 1)
+            if len(parts) != 2:
+                continue
+            domain = parts[1].strip().lower().rstrip('.,;:')
+            if domain:
+                domain_counter[domain] += 1
+    return domain_counter
+# ----------------------------------------------------
+
+def analyze_excel(input_file, output_file):
     print(LOGO)
+    print(f"Lettura del file Excel: {input_file}")
 
     identity_counter = Counter()
+    identity_last_seen = defaultdict(list)
     quarterly_counter = defaultdict(int)
     hash_date_counter = defaultdict(list)
     all_hash_counter = Counter()
@@ -64,110 +156,186 @@ def analyze_csv(input_file, output_file):
     current_year = datetime.now().year
 
     try:
-        with open(input_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            expected_headers = ['imported_at', 'indicator_of_identity', 'hash', 'source']
-            if not all(header.strip() in reader.fieldnames for header in expected_headers):
-                print(f"Errore: Header mancanti. Header trovati: {reader.fieldnames}")
-                return
+        df = pd.read_excel(input_file)
+        
+        header_mapping = {
+            'Event data': 'imported_at',
+            'Indicator / Account': 'indicator_of_identity',
+            'Hash /Password': 'hash',
+            'Sources': 'source'
+        }
+        
+        missing_headers = []
+        for required_header in header_mapping.keys():
+            if required_header not in df.columns:
+                missing_headers.append(required_header)
+        
+        if missing_headers:
+            print(f"Errore: Header mancanti nel file Excel: {missing_headers}")
+            print(f"Header trovati: {list(df.columns)}")
+            return
+        
+        df = df.rename(columns=header_mapping)
+        
+        print(f"Trovati {len(df)} record nel file Excel")
+        
+        for idx, row in df.iterrows():
+            identity = str(row['indicator_of_identity']).strip() if pd.notna(row['indicator_of_identity']) else ''
+            hash_value = str(row['hash']).strip() if pd.notna(row['hash']) else ''
+            date_obj = parse_date(row['imported_at'])
 
-            for row in reader:
-                identity = row['indicator_of_identity'].strip()
-                hash_value = row['hash'].strip()
-                date_str = row['imported_at'].strip()
-                date_obj = parse_date(date_str)
+            if identity and identity != 'nan':
+                identity_counter[identity] += 1
+                if date_obj:
+                    identity_last_seen[identity].append(date_obj)
 
-                if identity:
-                    identity_counter[identity] += 1
-
-                if hash_value:
-                    all_hash_counter[hash_value] += 1
+            if hash_value and hash_value != 'nan':
+                all_hash_counter[hash_value] += 1
+                if identity and identity != 'nan':
                     hash_to_identity[hash_value].add(identity)
 
-                if date_obj:
-                    quarter = get_quarter(date_obj.month)
-                    quarter_key = f"{date_obj.year}-Q{quarter}"
-                    quarterly_counter[quarter_key] += 1
+            if date_obj:
+                quarter = get_quarter(date_obj.month)
+                quarter_key = f"{date_obj.year}-Q{quarter}"
+                quarterly_counter[quarter_key] += 1
 
-                    if hash_value and date_obj.year >= current_year - 1:
-                        hash_date_counter[hash_value].append(date_obj)
+                if hash_value and hash_value != 'nan' and date_obj.year >= current_year - 1:
+                    hash_date_counter[hash_value].append(date_obj)
 
     except FileNotFoundError:
         print(f"Errore: File '{input_file}' non trovato.")
         return
     except Exception as e:
-        print(f"Errore durante la lettura del file: {e}")
+        print(f"Errore durante la lettura del file Excel: {e}")
         return
 
     results = []
     total_identities = sum(identity_counter.values())
 
-    print("Cerco l'indicator_of_identity con più occorrenze...")
-    if identity_counter:
-        most_common_identity = identity_counter.most_common(1)[0]
-        results.append({
-            'Metrica': 'Indicator of Identity più frequente',
-            'Valore': most_common_identity[0],
-            'Count': most_common_identity[1]
-        })
+    # Nota: la richiesta è di rimuovere la riga "Indicator / Account più frequente"
+    # quindi NON aggiungiamo più quella metrica al report.
 
-    print("Creo una lista per i top 10 indicator_of_identity ordinati per frequenza")
+    print("Creo una lista per i top 10 Indicator / Account ordinati per frequenza...")
     top_10_identities = identity_counter.most_common(10)
     for i, (identity, count) in enumerate(top_10_identities, 1):
+        last_seen_date = max(identity_last_seen[identity]) if identity_last_seen[identity] else None
+        last_seen_str = last_seen_date.strftime("%d/%m/%Y %H:%M:%S") if last_seen_date else "N/A"
+        
         results.append({
-            'Metrica': f'Top {i} Indicator of Identity',
+            'Metrica': f'Top {i} Indicator / Account',
             'Valore': identity,
-            'Count': count
+            'Count': count,
+            'Ultima_Rilevazione': last_seen_str,
+            'Simili': '',
+            'Simili_Count': '',
+            'Utenti Coinvolti': ''
         })
 
-    print("Calcolo le occorrenze totali per ogni trimestre/anno")
+    print("Calcolo le occorrenze totali per ogni trimestre/anno...")
     sorted_quarters = sorted(quarterly_counter.items())
     for quarter_key, count in sorted_quarters:
         results.append({
             'Metrica': f'Occorrenze totali {quarter_key}',
             'Valore': quarter_key,
-            'Count': count
+            'Count': count,
+            'Ultima_Rilevazione': '',
+            'Simili': '',
+            'Simili_Count': '',
+            'Utenti Coinvolti': ''
         })
 
-    print("Identifica i top 5 hash più utilizzati nell'ultimo anno")
+    # --- Nuova sezione: conteggio globale raggruppato per anno (ultima riga)
+    year_counter = defaultdict(int)
+    for quarter_key, count in quarterly_counter.items():
+        try:
+            year = int(quarter_key.split('-')[0])
+            year_counter[year] += count
+        except Exception:
+            continue
+
+    if year_counter:
+        # ordina per anno crescente e formatta come "YYYY: count"
+        year_parts = [f"{yr}: {year_counter[yr]}" for yr in sorted(year_counter.keys())]
+        year_summary = ", ".join(year_parts)
+        total_all_years = sum(year_counter.values())
+        # Aggiungiamo la riga finale come richiesto (ultima riga del file)
+        results.append({
+            'Metrica': 'Conteggio per anno',
+            'Valore': year_summary,
+            'Count': total_all_years,
+            'Ultima_Rilevazione': '',
+            'Simili': '',
+            'Simili_Count': '',
+            'Utenti Coinvolti': ''
+        })
+
+    print("Identifico i top 5 gruppi di hash più utilizzati nell'ultimo anno...")
     recent_hash_counter = Counter()
     for hash_value, dates in hash_date_counter.items():
         recent_count = sum(1 for d in dates if d.year >= current_year - 1)
         if recent_count > 0:
             recent_hash_counter[hash_value] = recent_count
 
-    top_5_hashes = recent_hash_counter.most_common(5)
-    similar_hashes = find_similar_hashes([h for h, _ in top_5_hashes], all_hash_counter.keys(), all_hash_counter)
-
-    for i, (hash_value, count) in enumerate(top_5_hashes, 1):
-        similars = similar_hashes[hash_value]
-        similar_list = ", ".join(similars.keys()) if similars else "-"
-        similar_count = sum(similars.values()) if similars else 0
-
-        related_users = set()
-        for h in [hash_value] + list(similars.keys()):
-            related_users.update(hash_to_identity.get(h, []))
-
+    all_hashes = list(all_hash_counter.keys())
+    components = build_hash_components(all_hashes)
+    
+    component_recent_freq = defaultdict(int)
+    for root, comp_set in components.items():
+        total = 0
+        for hash_val in comp_set:
+            total += recent_hash_counter.get(hash_val, 0)
+        component_recent_freq[root] = total
+    
+    sorted_components = sorted(component_recent_freq.items(), key=lambda x: x[1], reverse=True)[:5]
+    
+    for i, (root, total_freq) in enumerate(sorted_components, 1):
+        comp_set = components[root]
+        sorted_hashes = sorted(comp_set, key=lambda h: (-recent_hash_counter.get(h, 0), h))
+        top_hash = sorted_hashes[0] if sorted_hashes else ""
+        
+        group_size = len(comp_set)
+        if group_size <= 1:
+            similar_str = "No similar hashes"
+        else:
+            others = sorted_hashes[1:3]
+            others_str = ", ".join([h[:20] + '...' if len(h) > 20 else h for h in others])
+            if group_size > 3:
+                similar_str = f"{group_size} hashes: {others_str} (and {group_size-3} more)"
+            else:
+                similar_str = f"{group_size} hashes: {others_str}"
+        
+        identities = set()
+        for h in comp_set:
+            identities.update(hash_to_identity.get(h, set()))
+        identities_str = ", ".join(sorted(identities)) if identities else "-"
+        
         results.append({
-            'Metrica': f'Top {i} Hash ultimo anno',
-            'Valore': hash_value[:20] + '...' if len(hash_value) > 20 else hash_value,
-            'Count': count,
-            'Simili': similar_list,
-            'Simili_Count': similar_count,
-            'Utenti Coinvolti': ", ".join(sorted(related_users)) if related_users else "-"
+            'Metrica': f'Top {i} Group',
+            'Valore': top_hash[:20] + '...' if len(top_hash) > 20 else top_hash,
+            'Count': total_freq,
+            'Ultima_Rilevazione': '',
+            'Simili': similar_str,
+            'Simili_Count': group_size,
+            'Utenti Coinvolti': identities_str
         })
 
+    # Salva i risultati
     try:
-        with open(output_file, 'w', newline='', encoding='utf-8') as f:
-            fieldnames = ['Metrica', 'Valore', 'Count', 'Simili', 'Simili_Count', 'Utenti Coinvolti']
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(results)
+        if output_file.endswith('.xlsx'):
+            output_df = pd.DataFrame(results)
+            output_df.to_excel(output_file, index=False)
+            print(f"\nAnalisi completata! Risultati salvati in '{output_file}' (formato Excel)")
+        else:
+            with open(output_file, 'w', newline='', encoding='utf-8') as f:
+                fieldnames = ['Metrica', 'Valore', 'Count', 'Ultima_Rilevazione', 'Simili', 'Simili_Count', 'Utenti Coinvolti']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(results)
+            print(f"\nAnalisi completata! Risultati salvati in '{output_file}' (formato CSV)")
 
-        print(f"\nAnalisi completata! Risultati salvati in '{output_file}'")
         print("\n=== RIEPILOGO ANALISI ===")
         print(f"Totale record analizzati: {total_identities}")
-        print(f"Indicator of Identity unici: {len(identity_counter)}")
+        print(f"Indicator / Account unici: {len(identity_counter)}")
         print(f"Hash unici nell'ultimo anno: {len(recent_hash_counter)}")
         print(f"Trimestri analizzati: {len(quarterly_counter)}")
 
@@ -175,14 +343,25 @@ def analyze_csv(input_file, output_file):
         print(f"Errore durante la scrittura del file di output: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Analizza un file CSV con dati di identity indicators')
-    parser.add_argument('input_file', help='Path del file CSV di input')
-    parser.add_argument('-o', '--output', default='risultati_analisi.csv',
-                        help='Path del file CSV di output (default: risultati_analisi.csv)')
+    parser = argparse.ArgumentParser(description='Analizza un file Excel con dati di identity indicators')
+    parser.add_argument('input_file', help='Path del file Excel di input (.xlsx)')
+    parser.add_argument('-o', '--output', default='risultati_analisi.xlsx',
+                        help='Path del file di output (default: risultati_analisi.xlsx). Usa .xlsx per Excel o .csv per CSV')
     args = parser.parse_args()
 
-    print(f"Analisi del file: {args.input_file}")
-    analyze_csv(args.input_file, args.output)
+    if not args.input_file.endswith(('.xlsx', '.xls')):
+        print("Attenzione: Il file di input dovrebbe essere in formato Excel (.xlsx o .xls)")
 
+    import os
+    base_name = os.path.basename(args.input_file)   # es: Uccio - dati_breach_2024.xlsx
+    prefix = base_name.split(" - ")[0]              # es: Uccio
+    _, ext = os.path.splitext(args.output)          # es: .xlsx
+    output_file = f"{prefix} - risultati_analisi{ext}"
+
+    print(f"Analisi del file: {args.input_file}")
+    analyze_excel(args.input_file, output_file)
+    
 if __name__ == "__main__":
     main()
+
+
