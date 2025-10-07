@@ -24,7 +24,7 @@ Uno strumento avanzato per analizzare dati di identità compromesse, identificar
 ## Installazione
 
 ```bash
-git clone https://github.com/tuorepo/data-leaked-analyzer.git
+git clone https://github.com/cyb3ri0t/data-leaked-analyzer5.git
 cd data-leaked-analyzer
 ```
 
@@ -104,16 +104,4 @@ I contributi sono benvenuti! Apri una issue o una pull request per suggerire mig
 Distribuito con licenza MIT - vedi il file [LICENSE](LICENSE) per i dettagli.
 ```
 
-Per scaricare direttamente il file, puoi:
 
-1. Copiare tutto il testo sopra
-2. Incollarlo in un nuovo file chiamato `README.md`
-3. Salvare il file nella tua directory di progetto
-
-Oppure usa questo comando curl (se hai un repository pubblico):
-
-```bash
-curl -o README.md https://gist.githubusercontent.com/fakeuser/fakegist/raw/README.md
-```
-
-Nota: sostituisci "tuorepo" con l'effettivo URL del tuo repository GitHub nella sezione Installazione.
